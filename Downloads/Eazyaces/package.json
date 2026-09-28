@@ -1,0 +1,13 @@
+{
+  "name": "kaamsetu-marketplace",
+  "private": true,
+  "workspaces": ["apps/frontend", "apps/backend/auth-service", "apps/backend/booking-service", "apps/backend/notification-service"],
+  "scripts": {
+    "dev": "npm run dev:frontend",
+    "dev:frontend": "npm run dev --workspace=apps/frontend",
+    "dev:auth": "npm run dev --workspace=apps/backend/auth-service",
+    "dev:bookings": "npm run dev --workspace=apps/backend/booking-service",
+    "dev:notifications": "npm run dev --workspace=apps/backend/notification-service",
+    "build": "npm run build --workspace=apps/frontend && npm run build --workspace=apps/backend/auth-service && npm run build --workspace=apps/backend/booking-service && npm run build --workspace=apps/backend/notification-service"
+  }
+}

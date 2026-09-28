@@ -1,0 +1,8 @@
+node_modules/
+.next/
+dist/
+.env
+.env.*
+!.env.example
+apps/backend/auth-service/uploads/
+.DS_Store

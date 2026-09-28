@@ -1,0 +1,86 @@
+name: Deploy to cloud Kubernetes
+
+on:
+  workflow_run:
+    workflows: [Container build and publish]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target
+        required: true
+        type: choice
+        options: [staging, production]
+
+permissions:
+  contents: read
+  packages: read
+  id-token: write
+
+concurrency:
+  group: cloud-deploy-${{ github.event_name == 'workflow_dispatch' && inputs.target || 'staging' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'staging' }}
+    env:
+      APP_BASE_URL: ${{ vars.APP_BASE_URL }}
+      IMAGE_REPOSITORY: ${{ github.repository }}
+      KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+      KUBE_CONTEXT: ${{ vars.KUBE_CONTEXT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+      - uses: imranismail/setup-kustomize@v2
+      - name: Configure cloud cluster access
+        shell: bash
+        run: |
+          if [ -z "$KUBECONFIG_B64" ]; then
+            echo "KUBECONFIG_B64 must be configured as an environment secret, or replace this step with your cloud provider's GitHub OIDC login action." >&2
+            exit 1
+          fi
+          install -d -m 700 "$RUNNER_TEMP/kube"
+          printf '%s' "$KUBECONFIG_B64" | base64 --decode > "$RUNNER_TEMP/kube/config"
+          chmod 600 "$RUNNER_TEMP/kube/config"
+          echo "KUBECONFIG=$RUNNER_TEMP/kube/config" >> "$GITHUB_ENV"
+          if [ -n "$KUBE_CONTEXT" ]; then kubectl config use-context "$KUBE_CONTEXT"; fi
+          kubectl cluster-info
+      - name: Select immutable images and deploy overlay
+        shell: bash
+        env:
+          TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'staging' }}
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          IMAGE_PREFIX="ghcr.io/$(printf '%s' "$IMAGE_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          case "$TARGET" in staging|production) ;; *) echo "Unsupported deployment target: $TARGET" >&2; exit 1 ;; esac
+          OVERLAY="infra/k8s/overlays/$TARGET"
+          cd "$GITHUB_WORKSPACE/$OVERLAY"
+          kustomize edit set image \
+            ghcr.io/replace-owner/replace-repo/frontend="$IMAGE_PREFIX/frontend:$IMAGE_TAG" \
+            ghcr.io/replace-owner/replace-repo/auth-service="$IMAGE_PREFIX/auth-service:$IMAGE_TAG" \
+            ghcr.io/replace-owner/replace-repo/booking-service="$IMAGE_PREFIX/booking-service:$IMAGE_TAG"
+          if kustomize build . | grep -Eq 'REPLACE_WITH_|example\.com|ghcr\.io/replace-owner'; then
+            echo "Selected overlay still contains deployment placeholders. Configure its domain and object-storage bucket first." >&2
+            exit 1
+          fi
+          kubectl apply -f ../../base/namespace.yaml --wait=true
+          kubectl -n kaamsetu get secret kaamsetu-secrets >/dev/null
+          kubectl apply -k .
+          kubectl -n kaamsetu rollout status deployment/frontend --timeout=5m
+          kubectl -n kaamsetu rollout status deployment/auth-service --timeout=5m
+          kubectl -n kaamsetu rollout status deployment/booking-service --timeout=5m
+      - name: Verify staging endpoint
+        if: ${{ github.event_name == 'workflow_run' || inputs.target == 'staging' }}
+        shell: bash
+        run: |
+          if [ -z "$APP_BASE_URL" ]; then echo "Set APP_BASE_URL in the staging GitHub Environment." >&2; exit 1; fi
+          curl --fail --silent --show-error "$APP_BASE_URL/health" || curl --fail --silent --show-error "$APP_BASE_URL/"

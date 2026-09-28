@@ -1,0 +1,24 @@
+# Optional snippet for a cloud-hosted Prometheus server. Merge this scrape job
+# into its configuration; do not apply it as a Kubernetes object.
+scrape_configs:
+  - job_name: kaamsetu-backends
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names: [kaamsetu]
+    relabel_configs:
+      - source_labels:
+          [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels:
+          [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+        action: replace
+        target_label: __address__
+        regex: "(.+?)(?::\\d+)?;(\\d+)"
+        replacement: "$1:$2"

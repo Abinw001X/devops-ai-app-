@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+test
+tests
+*.log
+.vscode
+.env
+.env.*
+!.env.example
+README.md

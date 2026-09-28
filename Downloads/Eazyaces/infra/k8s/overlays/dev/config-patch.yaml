@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kaamsetu-config
+data:
+  CLIENT_ORIGIN: https://dev.kaamsetu.example.com
+  PUBLIC_API_URL: https://dev.kaamsetu.example.com
+  OBJECT_STORAGE_BUCKET: REPLACE_WITH_DEV_BUCKET

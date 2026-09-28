@@ -1,0 +1,136 @@
+name: kaamsetu
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    profiles: [optional-stack]
+    environment:
+      POSTGRES_DB: kaamsetu
+      POSTGRES_USER: ${POSTGRES_USER:-kaamsetu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-compose-password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./apps/backend/auth-service/src/db/schema.sql:/docker-entrypoint-initdb.d/01-auth.sql:ro
+      - ./apps/backend/booking-service/src/db/schema.sql:/docker-entrypoint-initdb.d/02-bookings.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d kaamsetu"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    profiles: [optional-stack]
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--requirepass",
+        "${COMPOSE_REDIS_PASSWORD:-local-redis-password}",
+      ]
+    environment:
+      REDIS_PASSWORD: ${COMPOSE_REDIS_PASSWORD:-local-redis-password}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", 'redis-cli -a "$${REDIS_PASSWORD}" ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  auth-service:
+    image: kaamsetu/auth-service:local
+    profiles: [optional-stack]
+    build:
+      context: .
+      dockerfile: apps/backend/auth-service/Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://kaamsetu:local-compose-password@postgres:5432/kaamsetu}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-local-compose-secret-change-before-deploy-123456}
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:3000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      ADMIN_BOOTSTRAP_KEY: ${ADMIN_BOOTSTRAP_KEY:-}
+      NOTIFICATION_SERVICE_URL: http://booking-service:4001
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-local-internal-secret-change-before-deploy}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:4000}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-}
+      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-us-east-1}
+      OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:-}
+      OBJECT_STORAGE_PUBLIC_URL: ${OBJECT_STORAGE_PUBLIC_URL:-}
+      OBJECT_STORAGE_FORCE_PATH_STYLE: ${OBJECT_STORAGE_FORCE_PATH_STYLE:-false}
+      OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:-}
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-}
+    ports:
+      - "4000:4000"
+    volumes:
+      - auth_uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  booking-service:
+    image: kaamsetu/booking-service:local
+    profiles: [optional-stack]
+    build:
+      context: .
+      dockerfile: apps/backend/booking-service/Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 4001
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://kaamsetu:local-compose-password@postgres:5432/kaamsetu}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-local-compose-secret-change-before-deploy-123456}
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:3000}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-local-internal-secret-change-before-deploy}
+      REDIS_URL: redis://:${COMPOSE_REDIS_PASSWORD:-local-redis-password}@redis:6379
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+      RAZORPAY_AUTO_CAPTURE: ${RAZORPAY_AUTO_CAPTURE:-true}
+      RAZORPAYX_KEY_ID: ${RAZORPAYX_KEY_ID:-}
+      RAZORPAYX_KEY_SECRET: ${RAZORPAYX_KEY_SECRET:-}
+      RAZORPAYX_ACCOUNT_NUMBER: ${RAZORPAYX_ACCOUNT_NUMBER:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
+    ports:
+      - "4001:4001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    image: kaamsetu/frontend:local
+    profiles: [optional-stack]
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000/api}
+        NEXT_PUBLIC_BOOKING_API_URL: ${NEXT_PUBLIC_BOOKING_API_URL:-http://localhost:4001/api}
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3000:3000"
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      booking-service:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  auth_uploads:

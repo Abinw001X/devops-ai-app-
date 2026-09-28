@@ -1,0 +1,93 @@
+name: Container build and publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint --workspace=apps/frontend
+      - run: npm test --if-present
+      - run: npm run build
+      - run: npm audit --omit=dev
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: frontend
+            dockerfile: apps/frontend/Dockerfile
+          - image: auth-service
+            dockerfile: apps/backend/auth-service/Dockerfile
+          - image: booking-service
+            dockerfile: apps/backend/booking-service/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        shell: bash
+        run: echo "prefix=ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - name: Build amd64 image and report size
+        env:
+          NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+          NEXT_PUBLIC_BOOKING_API_URL: ${{ vars.NEXT_PUBLIC_BOOKING_API_URL }}
+          NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${{ vars.NEXT_PUBLIC_GOOGLE_CLIENT_ID }}
+        run: |
+          docker buildx build --platform linux/amd64 --load \
+            --file "${{ matrix.dockerfile }}" \
+            --tag "local/${{ matrix.image }}:${GITHUB_SHA}" \
+            --build-arg "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}" \
+            --build-arg "NEXT_PUBLIC_BOOKING_API_URL=${NEXT_PUBLIC_BOOKING_API_URL}" \
+            --build-arg "NEXT_PUBLIC_GOOGLE_CLIENT_ID=${NEXT_PUBLIC_GOOGLE_CLIENT_ID}" .
+          BYTES=$(docker image inspect "local/${{ matrix.image }}:${GITHUB_SHA}" --format '{{.Size}}')
+          node -e 'const n=Number(process.argv[1]); console.log(`${process.argv[2]} linux/amd64: ${(n / 1024 / 1024).toFixed(1)} MiB`)' "$BYTES" "${{ matrix.image }}" | tee -a "$GITHUB_STEP_SUMMARY"
+          LIMIT_MB=150
+          if [ "${{ matrix.image }}" = "frontend" ]; then LIMIT_MB=200; fi
+          if [ "$BYTES" -gt "$((LIMIT_MB * 1024 * 1024))" ]; then
+            echo "::warning title=Container image size::${{ matrix.image }} exceeds the approximate ${LIMIT_MB} MiB target; inspect traced files and production dependencies."
+          fi
+      - name: Publish immutable multi-architecture image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.prefix }}/${{ matrix.image }}:${{ github.sha }}
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
+            NEXT_PUBLIC_BOOKING_API_URL=${{ vars.NEXT_PUBLIC_BOOKING_API_URL }}
+            NEXT_PUBLIC_GOOGLE_CLIENT_ID=${{ vars.NEXT_PUBLIC_GOOGLE_CLIENT_ID }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Scan pushed image
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ steps.image.outputs.prefix }}/${{ matrix.image }}:${{ github.sha }}
+          format: table
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"

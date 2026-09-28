@@ -1,0 +1,64 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kaamsetu
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+    - hosts:
+        - app.example.com
+      secretName: kaamsetu-tls
+  rules:
+    - host: app.example.com
+      http:
+        paths:
+          - path: /api/auth
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  name: http
+          - path: /api/profiles
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  name: http
+          - path: /api/admin/providers
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  name: http
+          - path: /media/profiles
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  name: http
+          - path: /socket.io
+            pathType: Prefix
+            backend:
+              service:
+                name: booking-service
+                port:
+                  name: http
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: booking-service
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  name: http
